@@ -2,8 +2,9 @@
 charger_contexte.py — Injecte contexte_opgg.json (builds, runes, counters, matchups, synergies,
 tier lists, guides d'itemisation — patch actuel, op.gg Emerald+) dans la base ChromaDB existante.
 
-Remplace les anciens builds écrits à la main (items/runes obsolètes) et les stats U.GG.
-Pas besoin de relancer scrapper.py. Lance :  python charger_contexte.py
+Remplace les anciens builds (items/runes obsolètes) par les stats réelles du patch.
+pipeline.py recrée la collection "lol" : relance ce script après chaque indexation.
+Lance :  python charger_contexte.py
 """
 
 import json
@@ -41,3 +42,4 @@ for k in range(0, len(chunks), LOT):
         print(f"   {k + len(lot)}/{len(chunks)} chunks indexés...")
 
 print(f"\nBase à jour : {collection.count()} chunks au total. Lance : streamlit run app.py")
+
