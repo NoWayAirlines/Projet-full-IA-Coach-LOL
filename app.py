@@ -6,9 +6,12 @@ Lance avec : streamlit run app.py
 import streamlit as st
 from lol_rag import repondre
 
-st.set_page_config(page_title="LoL Coach IA", page_icon="⚔️")
+st.set_page_config(page_title="LoL Coach IA", page_icon="⚔️", layout="centered")
 st.title("⚔️ LoL Coach IA")
-st.caption("Pose n'importe quelle question sur League of Legends — champions, builds, méta, stratégie...")
+st.caption(
+    "Coach IA niveau Challenger — builds, matchups, wave management, macro, counters. "
+    "Ex: *build teemo vs vi top*, *comment freeze wave vs darius*, *counter vi jungle*"
+)
 
 # ── Historique de la conversation ───────────────────────────────────────────
 if "historique" not in st.session_state:

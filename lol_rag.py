@@ -8,13 +8,32 @@ import re
 import ollama
 import chromadb
 from builds import BUILDS
+try:
+    from builds_opgg import BUILDS as BUILDS_OPGG
+except ImportError:
+    BUILDS_OPGG = {}
 
-# Charge la base persistante (remplie par scrapper.py)
+# Base persistante (remplie par pipeline.py --index)
 client = chromadb.PersistentClient(path="./lol_db")
-collection = client.get_collection("lol")
 
-# Liste de tous les champions connus
-CHAMPIONS_CONNUS = set(BUILDS.keys()) | {
+
+def get_collection():
+    """Récupère la collection à chaque appel (évite les références périmées
+    quand la base est reconstruite par pipeline.py pendant que l'app tourne)."""
+    try:
+        col = client.get_collection("lol")
+        if col.count() == 0:
+            raise ValueError("collection vide")
+        return col
+    except Exception:
+        raise RuntimeError(
+            "Base ChromaDB 'lol' introuvable ou vide. "
+            "Lance d'abord :  python pipeline.py --index  "
+            "(et ne relance pas l'app pendant l'indexation)."
+        )
+
+# Liste de tous les champions connus (builds manuels + op.gg)
+CHAMPIONS_CONNUS = set(BUILDS.keys()) | set(BUILDS_OPGG.keys()) | {
     "Aatrox", "Ahri", "Akali", "Alistar", "Amumu", "Anivia", "Annie", "Ashe",
     "Azir", "Bard", "Blitzcrank", "Brand", "Braum", "Caitlyn", "Camille",
     "Cassiopeia", "Cho'Gath", "Corki", "Darius", "Diana", "Dr. Mundo", "Draven",
@@ -39,19 +58,35 @@ CHAMPIONS_CONNUS = set(BUILDS.keys()) | {
     "Zoe", "Zyra",
 }
 
-SYSTEM_PROMPT = """Tu es un coach LoL niveau Challenger. Style : pro, direct, dense.
+SYSTEM_PROMPT = """Tu es un coach LoL niveau Challenger. Style : pro, direct, dense. Langue de l'utilisateur = langue de la réponse.
 
 RÈGLES :
-1. Réponses courtes par défaut. Si l'utilisateur demande plus de détails ou de clarté, développe.
+1. Réponses courtes par défaut. Si l'utilisateur demande plus de détails, développe.
 2. Noms de champions, items, sorts, runes : TOUJOURS en anglais. Ne traduis jamais.
-3. Utilise le vocabulaire pro : burst, poke, all-in, kite, peel, engage, disengage, splitpush, wave clear, roam, snowball, powerspike, itemisation, matchup, trading pattern, lane bully, hypercarry, frontline, backline, dive, reset, etc.
-4. Items et données : UNIQUEMENT ce qui est dans le CONTEXTE. Si absent, dis "pas de data sur ça".
-5. N'invente rien. Jamais.
-6. Précise toujours qui joue qui : "Tu joues X vs Y." Si ambigu, demande avant de répondre.
-7. Chaque item = justification pro en 5 mots max entre parenthèses.
+3. Items et données : UNIQUEMENT ce qui est dans le CONTEXTE. Si absent, dis "pas de data sur ça".
+4. N'invente rien. Jamais.
+5. Précise toujours qui joue qui : "Tu joues X vs Y en [lane]." Si ambigu, demande.
+6. Chaque item = justification pro en 5 mots max entre parenthèses.
+7. MATCHUP : le CONTEXTE peut contenir des conseils de matchup contre un AUTRE adversaire que celui demandé (ex: data "vs Urgot" alors que tu joues vs Aatrox). IGNORE ces conseils hors-sujet. N'utilise QUE les infos pertinentes pour l'adversaire réellement demandé. Ne cite JAMAIS un nom de champion adverse qui n'est pas Y.
+8. PRIX DES ITEMS : ne donne un coût en or QUE s'il est écrit dans le CONTEXTE. Sinon n'invente AUCUN prix. Ne mets pas de "(Xg)" inventé.
+9. SORTS ≠ ITEMS : Q/W/E/R sont des sorts (abilities), PAS des items à acheter. Ex: "Fishbones", "Pow-Pow", "Flame Chompers" sont les sorts de Jinx, jamais dans le build. Ne mélange jamais sorts et items.
+10. Ne parle JAMAIS d'"énergie" sauf si le champion utilise vraiment l'Énergie (Energy) comme ressource (Zed, Akali, Lee Sin...). La plupart des champions utilisent la Mana.
+11. Recopie les items EXACTEMENT comme dans le CONTEXTE. N'invente pas d'items (pas de "Zephyr", "Sorcery Shoes" s'ils ne sont pas dans le contexte).
+
+VOCABULAIRE PRO OBLIGATOIRE (utilise ces termes, ne les traduis pas) :
+- Wave management : freeze (geler la vague devant sa tour), slow push (faire grossir la vague), fast push (push rapide), crash wave / crashwave (envoyer grosse vague sur tour avant de roam)
+- Lane : kite / kiting (se déplacer en attaquant pour maintenir la distance), poke (harcèlement à distance), all-in (engagement total), trading pattern (pattern d'échange), lane bully (champion qui domine par l'agression), short trade / extended trade
+- Jungle : gank (attaque soudaine d'une lane), invade (envahir la jungle adverse), counter-jungle, path (chemin de jungle), leash (aide au premier camp), objective control
+- Vision : deward / dewarder (retirer les wards ennemies avec sweeper), ward (placer une ward), control ward
+- Macro : roam (quitter sa lane), TP trade, splitpush, 1-3-1, grouper (group up), rotation
+- Combat : burst (dégâts instantanés), peel (protéger son carry), engage / disengage, dive (attaquer sous tower), hard CC, interrupt, outplay
+- Scaling : powerspike (moment de pic de puissance), hypercarry, snowball, reset (retour base)
+- Champion class : frontline / backline, engage comp, poke comp, pick comp, dive comp
+- Counter : hard counter, counter-pick, favored matchup / losing matchup
+- Misc : CS (creep score), itemisation, 6 CS = 1 kill (or), tilt, mental
 
 FORMAT build :
-👤 Tu joues : X | vs : Y
+👤 Tu joues : X | vs : Y | Lane : Z
 🟢 Départ : ...
 🔵 Build :
   1. Item1 (justification)
@@ -60,15 +95,22 @@ FORMAT build :
   4. Item4 (justification)
   5. Item5 (justification)
   6. Item6 (justification)
-🔑 Runes : ...
+🔑 Runes : keystone | arbre secondaire
 ⚡ Spells : ...
-📈 Ordre sorts : ..."""
+📈 Ordre sorts : ...
+⚔️ Tips matchup : ..."""
 
 
 def detecter_champions(texte: str) -> list[str]:
     """Retourne les noms de champions présents dans le texte (insensible à la casse)."""
     texte_lower = texte.lower()
-    return [c for c in CHAMPIONS_CONNUS if c.lower() in texte_lower]
+    found = []
+    for c in CHAMPIONS_CONNUS:
+        # Cherche le nom complet ET version sans caractères spéciaux
+        slug = c.lower().replace("'", "").replace(".", "").replace(" ", "")
+        if c.lower() in texte_lower or slug in texte_lower.replace(" ", ""):
+            found.append(c)
+    return found
 
 
 def recuperer_contexte(question: str, historique: list, n_semantic: int = 5) -> tuple[str, dict]:
@@ -79,6 +121,7 @@ def recuperer_contexte(question: str, historique: list, n_semantic: int = 5) -> 
     """
     docs_forces = []
     ids_deja_vus = set()
+    collection = get_collection()  # rechargée à chaque requête (évite cache périmé)
 
     # Cherche les champions dans la question ET toute la conversation
     texte_complet = question + " " + " ".join(
@@ -138,5 +181,9 @@ def repondre(question: str, historique: list):
         "content": f"CONTEXTE (données réelles LoL — utilise UNIQUEMENT ceci) :\n{contexte}\n\nQUESTION : {question}",
     })
 
-    reponse = ollama.chat(model="llama3.2", messages=messages)["message"]["content"]
+    reponse = ollama.chat(
+        model="llama3.1:8b",  # modèle 8B : moins d'hallucinations que llama3.2 3B
+        messages=messages,
+        options={"temperature": 0.2},  # bas = réponses fidèles au contexte, moins d'inventions
+    )["message"]["content"]
     return reponse, resultats

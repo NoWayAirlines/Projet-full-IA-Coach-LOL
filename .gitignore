@@ -1,0 +1,20 @@
+# Base vectorielle ChromaDB (regenerable via pipeline.py --index, lourde)
+lol_db/
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Sauvegarde intermediaire du scraping (regenerable)
+builds_opgg_partial.json
+
+# Environnement virtuel
+.venv/
+venv/
+
+# Fichiers OS
+Thumbs.db
+.DS_Store
+
+# Fichiers temporaires Word/Office
+~$*
