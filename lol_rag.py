@@ -4,14 +4,9 @@ Récupération intelligente : détecte les champions mentionnés et force la ré
 de leurs builds en plus de la recherche sémantique classique.
 """
 
-import re
+import json
 import ollama
 import chromadb
-from builds import BUILDS
-try:
-    from builds_opgg import BUILDS as BUILDS_OPGG
-except ImportError:
-    BUILDS_OPGG = {}
 
 # Base persistante (remplie par pipeline.py --index)
 client = chromadb.PersistentClient(path="./lol_db")
@@ -32,31 +27,9 @@ def get_collection():
             "(et ne relance pas l'app pendant l'indexation)."
         )
 
-# Liste de tous les champions connus (builds manuels + op.gg)
-CHAMPIONS_CONNUS = set(BUILDS.keys()) | set(BUILDS_OPGG.keys()) | {
-    "Aatrox", "Ahri", "Akali", "Alistar", "Amumu", "Anivia", "Annie", "Ashe",
-    "Azir", "Bard", "Blitzcrank", "Brand", "Braum", "Caitlyn", "Camille",
-    "Cassiopeia", "Cho'Gath", "Corki", "Darius", "Diana", "Dr. Mundo", "Draven",
-    "Ekko", "Elise", "Evelynn", "Ezreal", "Fiddlesticks", "Fiora", "Fizz",
-    "Galio", "Gangplank", "Garen", "Gnar", "Gragas", "Graves", "Hecarim",
-    "Heimerdinger", "Illaoi", "Irelia", "Ivern", "Janna", "Jarvan IV", "Jax",
-    "Jayce", "Jhin", "Jinx", "Kai'Sa", "Kalista", "Karma", "Karthus",
-    "Kassadin", "Katarina", "Kayle", "Kayn", "Kennen", "Kha'Zix", "Kindred",
-    "Kled", "Kog'Maw", "LeBlanc", "Lee Sin", "Leona", "Lillia", "Lissandra",
-    "Lucian", "Lulu", "Lux", "Malphite", "Malzahar", "Maokai", "Master Yi",
-    "Miss Fortune", "Mordekaiser", "Morgana", "Nami", "Nasus", "Nautilus",
-    "Neeko", "Nidalee", "Nocturne", "Nunu", "Olaf", "Orianna", "Ornn",
-    "Pantheon", "Poppy", "Pyke", "Qiyana", "Quinn", "Rakan", "Rammus",
-    "Rek'Sai", "Rell", "Renekton", "Rengar", "Riven", "Rumble", "Ryze",
-    "Samira", "Sejuani", "Senna", "Seraphine", "Sett", "Shaco", "Shen",
-    "Shyvana", "Singed", "Sion", "Sivir", "Skarner", "Sona", "Soraka",
-    "Swain", "Sylas", "Syndra", "Taliyah", "Talon", "Taric", "Teemo",
-    "Thresh", "Tristana", "Trundle", "Tryndamere", "Twisted Fate", "Twitch",
-    "Udyr", "Urgot", "Varus", "Vayne", "Veigar", "Vel'Koz", "Vi", "Viktor",
-    "Vladimir", "Volibear", "Warwick", "Wukong", "Xayah", "Xerath", "Xin Zhao",
-    "Yasuo", "Yone", "Yorick", "Yuumi", "Zac", "Zed", "Ziggs", "Zilean",
-    "Zoe", "Zyra",
-}
+# Noms de tous les champions (générés par pipeline.py --scrape dans contexte_opgg.json)
+with open("contexte_opgg.json", encoding="utf-8") as f:
+    CHAMPIONS_CONNUS = set(json.load(f)["champions"])
 
 SYSTEM_PROMPT = """Tu es un coach LoL niveau Challenger. Style : pro, direct, dense. Langue de l'utilisateur = langue de la réponse.
 
@@ -129,32 +102,24 @@ def recuperer_contexte(question: str, historique: list, n_semantic: int = 5) -> 
     )
     champions_detectes = detecter_champions(texte_complet)
 
-    # Force la récupération des builds pour chaque champion détecté
-    for champ in champions_detectes:
-        slug = champ.lower().replace(" ", "_").replace("'", "").replace(".", "")
-        ids_a_chercher = [
-            f"build_main_{slug}",
-            f"build_{slug}_standard",
-            f"build_{slug}_standard_(comp_équilibrée)",
-            f"build_{slug}_vs_tanks_(urgot,_malphite,_ornn...)",
-            f"build_{slug}_vs_assassins_(zed,_talon,_katarina...)",
-            f"build_{slug}_vs_healers_(soraka,_yuumi,_aatrox...)",
-            f"build_{slug}_fighter_(carry)",
-            f"build_{slug}_tank_(résistance_max)",
-            f"build_{slug}_fighter",
-            f"build_{slug}_tank",
-            f"build_{slug}_enchanteur",
-            f"counters_{slug}",
-            f"strong_{slug}",
-        ]
-        try:
-            res = collection.get(ids=ids_a_chercher)
-            for doc in (res.get("documents") or []):
-                if doc and doc not in ids_deja_vus:
-                    docs_forces.append(doc)
-                    ids_deja_vus.add(doc)
-        except Exception:
-            pass
+    # Force la récupération des fiches de chaque champion détecté (ID exact)
+    slugs = [c.lower().replace(" ", "_").replace("'", "").replace(".", "") for c in champions_detectes]
+    ids_a_chercher = []
+    for slug in slugs:
+        ids_a_chercher += [f"build_main_{slug}", f"build_{slug}_standard", f"counters_{slug}", f"strong_{slug}"]
+    # Deux champions cités ("Aatrox vs Darius") : fiche matchup, quelle que soit la lane
+    for a in slugs:
+        for b in slugs:
+            if a != b:
+                ids_a_chercher += [f"matchup_{a}_vs_{b}_{lane}" for lane in ("top", "jungle", "mid", "adc", "support")]
+    try:
+        res = collection.get(ids=ids_a_chercher)
+        for doc in (res.get("documents") or []):
+            if doc and doc not in ids_deja_vus:
+                docs_forces.append(doc)
+                ids_deja_vus.add(doc)
+    except Exception:
+        pass
 
     # Recherche sémantique classique
     q_emb = ollama.embed(model="nomic-embed-text", input=question)["embeddings"][0]

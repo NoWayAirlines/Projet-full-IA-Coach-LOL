@@ -5,8 +5,8 @@ lol_db/
 __pycache__/
 *.pyc
 
-# Sauvegarde intermediaire du scraping (regenerable)
-builds_opgg_partial.json
+# Cache des reponses brutes op.gg (regenerable, permet la reprise du scraping)
+opgg_cache/
 
 # Environnement virtuel
 .venv/
