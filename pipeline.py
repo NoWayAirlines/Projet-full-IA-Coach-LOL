@@ -323,9 +323,9 @@ def load_dd_data():
 # ETAPE 1a — COLLECTE op.gg (réponses brutes en cache, reprise automatique)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def save_json(path: str, obj):
+def save_json(path: str, obj, indent=None):
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False)
+        json.dump(obj, f, ensure_ascii=False, indent=indent)
 
 
 def load_json(path: str):
@@ -438,7 +438,7 @@ def build_contexte(dd: dict, cache: str, meta: dict) -> dict:
     chunks = []
 
     def add(id_: str, lignes: list):
-        chunks.append({"id": id_, "text": "\n".join(l for l in lignes if l).strip()})
+        chunks.append({"id": id_, "lignes": [l for l in lignes if l]})   # 1 ligne JSON par ligne de fiche
 
     def noms(ids, table=ITEM):
         return " + ".join(table.get(i, str(i)) for i in ids)
@@ -592,7 +592,7 @@ def build_contexte(dd: dict, cache: str, meta: dict) -> dict:
              for i, (_, n, t, st) in enumerate(lignes[:30], 1)])
 
     for id_, texte in GUIDES + META:
-        add(id_, [texte])
+        add(id_, texte.split("\n"))
 
     return {
         "patch": patch,
@@ -612,7 +612,7 @@ def run_scrape():
     print(f"Data Dragon v{dd['version']} — {len(dd['champ_list'])} champions")
     meta = collect(dd, cache)
     contexte = build_contexte(dd, cache, meta)
-    save_json(CONTEXTE_FILE, contexte)
+    save_json(CONTEXTE_FILE, contexte, indent=2)   # indenté : lisible à l'œil
     print(f"\nOK {CONTEXTE_FILE} : {len(contexte['chunks'])} fiches, patch {contexte['patch']}")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -646,7 +646,7 @@ def run_index():
     contexte = load_json(CONTEXTE_FILE)
     print(f"[1] {CONTEXTE_FILE} (patch {contexte['patch']})...")
     for c in contexte["chunks"]:
-        add(c["id"], c["text"])
+        add(c["id"], "\n".join(c["lignes"]))
     print(f"    {len(chunks)} chunks")
 
     # 2. Data Dragon — descriptions des sorts (Q/W/E/R)
